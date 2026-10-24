@@ -316,9 +316,11 @@ async function handleGroupMemberChangeMessage({
     window.log.warn('received group member change with invalid signature. dropping');
     return;
   }
-  const filteredMemberChange = change.memberSessionIds.filter(PubKey.is05Pubkey);
+  // `memberSessionIds` comes straight from a remote protobuf: it can be missing entirely, and
+  // an empty (or fully filtered out) list must not be used to build a member-change update.
+  const filteredMemberChange = (change.memberSessionIds || []).filter(PubKey.is05Pubkey);
 
-  if (!filteredMemberChange) {
+  if (filteredMemberChange.length === 0) {
     window.log.info('returning groupUpdate of member change without associated members...');
 
     return;

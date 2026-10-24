@@ -28,6 +28,7 @@ import url from 'url';
 import { configDotenv } from 'dotenv';
 
 import _, { isEmpty, isNumber, isFinite } from 'lodash';
+import { parse as parseVersion } from 'semver';
 
 import { addHandler } from '../node/global_errors';
 import { setup as setupSpellChecker } from '../node/spell_check';
@@ -534,16 +535,27 @@ ipc.on('show-window', () => {
 });
 
 ipc.on('set-release-from-file-server', (_event, releaseInfoFromFileServer) => {
+  if (!Array.isArray(releaseInfoFromFileServer)) {
+    console.error('[updater] set-release-from-file-server: invalid payload, expected an array');
+    return;
+  }
   const [releaseVersion, releaseChannel] = releaseInfoFromFileServer;
 
-  if (!releaseVersion || !releaseChannel || !isReleaseChannel(releaseChannel)) {
+  // `releaseVersion` is later compared with `semver.gt()`, which throws on garbage. Validate it
+  // here (in the privileged process) so a malformed/adversarial value cannot drive the updater.
+  if (
+    typeof releaseVersion !== 'string' ||
+    !parseVersion(releaseVersion.trim()) ||
+    !releaseChannel ||
+    !isReleaseChannel(releaseChannel)
+  ) {
     console.error(
       `[updater] set-release-from-file-server: invalid release information, version=${releaseVersion} or channel=${releaseChannel}`
     );
     return;
   }
 
-  setLatestRelease(releaseInfoFromFileServer);
+  setLatestRelease([releaseVersion.trim(), releaseChannel]);
 });
 
 let isReadyForUpdates = false;
@@ -1163,6 +1175,13 @@ ipc.on('set-password', async (event, passPhrase, oldPhrase) => {
       userConfig.set('dbHasPassword', false);
       sendResponse(undefined);
     } else {
+      // The passphrase is interpolated into the SQLCipher `rekey` pragma, so validate it here
+      // in the privileged process too and never only in the renderer.
+      const invalidReason = PasswordUtil.validatePassword(passPhrase);
+      if (invalidReason) {
+        sendResponse(invalidReason);
+        return;
+      }
       sqlNode.setSQLPassword(passPhrase);
       const newHash = PasswordUtil.generateHash(passPhrase);
       sqlNode.savePasswordHash(newHash);

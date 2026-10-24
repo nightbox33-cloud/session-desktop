@@ -11,7 +11,7 @@ import { allowOnlyOneAtATime } from '../../../utils/Promise';
 import { OpenGroupPollingUtils } from '../opengroupV2/OpenGroupPollingUtils';
 import { getOpenGroupV2ConversationId } from '../utils/OpenGroupUtils';
 import { OpenGroupV2Room } from '../../../../data/types';
-import { DURATION } from '../../../constants';
+import { DURATION, MAX_ATTACHMENT_FILESIZE_BYTES } from '../../../constants';
 import {
   SessionProfileResetAvatarGroupCommunity,
   SessionProfileSetAvatarDownloadedAny,
@@ -107,6 +107,16 @@ export async function fetchBinaryFromSogsWithOnionV4(sendOptions: {
     window.log.info('fetchBinaryFromSogsWithOnionV4 no binary content with code', res?.status_code);
     return null;
   }
+
+  // The community server decides how many bytes it sends us: never buffer an unbounded response.
+  const maxDownloadedBytes = MAX_ATTACHMENT_FILESIZE_BYTES + 1024 * 1024;
+  if (res.bodyBinary.byteLength > maxDownloadedBytes) {
+    window.log.warn(
+      `fetchBinaryFromSogsWithOnionV4: refusing a file of ${res.bodyBinary.byteLength} bytes (max ${maxDownloadedBytes})`
+    );
+    return null;
+  }
+
   return res.bodyBinary;
 }
 

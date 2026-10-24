@@ -37,8 +37,15 @@ async function verifyDigest(data: ArrayBuffer, theirDigest: ArrayBuffer) {
   return crypto.subtle.digest({ name: 'SHA-256' }, data).then(ourDigest => {
     const a = new Uint8Array(ourDigest);
     const b = new Uint8Array(theirDigest);
+
+    // Never compare a truncated (or oversized) digest: a 1 byte digest would only give us an
+    // 8 bits long check. The digest is always a full SHA-256.
+    if (a.byteLength !== b.byteLength) {
+      throw new Error('Bad digest length');
+    }
+
     let result = 0;
-    for (let i = 0; i < theirDigest.byteLength; i += 1) {
+    for (let i = 0; i < b.byteLength; i += 1) {
       // eslint-disable-next-line no-bitwise
       result |= a[i] ^ b[i];
     }

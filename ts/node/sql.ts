@@ -159,10 +159,31 @@ function openAndSetUpSQLCipher(filePath: string, { key }: { key: string }) {
   return openAndMigrateDatabase(filePath, key);
 }
 
+// A passphrase used for the SQLCipher `rekey` pragma ends up inside the pragma statement
+// itself (the pragma API does not support bind parameters), so we must refuse anything that
+// could break out of the quoted literal or change the meaning of the statement.
+// Keep this list in sync with `validatePassword()` in ts/util/passwordUtils.ts.
+const UNSAFE_SQL_KEY_CHARS = /[^\w\-!?/()._`~@#$%^&*+=[\]{}|<>,;: ]/;
+
+function assertSafeSQLKeyPassword(password: string) {
+  if (!isString(password) || password.length === 0) {
+    throw new Error('setSQLPassword: password must be a non-empty string');
+  }
+  // quotes/backslashes/newlines are the interesting characters for a pragma injection here.
+  if (password.includes("'") || password.includes('"') || /[\r\n\u0000]/.test(password)) {
+    throw new Error('setSQLPassword: password contains unsupported characters');
+  }
+  if (UNSAFE_SQL_KEY_CHARS.test(password)) {
+    throw new Error('setSQLPassword: password contains unsupported characters');
+  }
+}
+
 function setSQLPassword(password: string) {
   if (!assertGlobalInstance()) {
     throw new Error('setSQLPassword: db is not initialized');
   }
+
+  assertSafeSQLKeyPassword(password);
 
   // If the password isn't hex then we need to derive a key from it
   const deriveKey = HEX_KEY.test(password);

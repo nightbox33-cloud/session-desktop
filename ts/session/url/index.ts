@@ -101,7 +101,9 @@ function removeDefaultServerPk(url: URL) {
   }
 
   const urlCopy = new URL(url.toString());
-  searchParams.delete(queryParamEncryptionKey);
+  // We are removing the *default* server pubkey here (it is implicit). Removing the encryption
+  // key instead would silently drop the profile key from the url.
+  searchParams.delete(queryParamServerEd25519Pubkey);
   urlCopy.hash = stringifyFragmentParams(searchParams);
 
   return urlCopy;

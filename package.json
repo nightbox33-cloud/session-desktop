@@ -267,7 +267,7 @@
       "signtoolOptions": {
         "publisherName": "Session Technology Stiftung"
       },
-      "verifyUpdateCodeSignature": false,
+      "verifyUpdateCodeSignature": true,
       "icon": "build/icon.ico",
       "target": [
         "nsis"

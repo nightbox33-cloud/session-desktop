@@ -13,6 +13,7 @@ import { OpenGroupRequestCommonType } from '../data/types';
 import { downloadFileFromFileServer } from '../session/apis/file_server_api/FileServerApi';
 import { FileFromFileServerDetails } from '../session/apis/file_server_api/types';
 import { MultiEncryptWrapperActions } from '../webworker/workers/browser/libsession_worker_interface';
+import { MAX_ATTACHMENT_FILESIZE_BYTES } from '../session/constants';
 
 /**
  * Note: the url must have the serverPubkey as a query parameter
@@ -25,6 +26,15 @@ export async function downloadAttachmentFs(attachment: {
   digest?: string;
   size?: number;
 }) {
+  // The declared size comes from a remote message, so it must be validated *before* we fetch
+  // anything. Without this, a message can advertise a multi-gigabyte attachment and have the
+  // client download it into memory (memory exhaustion / disk fill).
+  if (attachment.size && attachment.size > MAX_ATTACHMENT_FILESIZE_BYTES) {
+    throw new Error(
+      `downloadAttachmentFs: declared attachment size ${attachment.size} is over the maximum allowed (${MAX_ATTACHMENT_FILESIZE_BYTES})`
+    );
+  }
+
   const toDownload = new FileFromFileServerDetails(attachment.url);
 
   let res: ArrayBuffer | null = null;

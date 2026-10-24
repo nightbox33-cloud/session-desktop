@@ -36,6 +36,15 @@ module.exports = async function (context) {
   await renameAsync(sourceExecutable, targetExecutable);
   // rename launcher script to session-desktop
   await renameAsync(launcherScript, sourceExecutable);
-  // remove the chrome-sandbox file since we explicitly disable it
-  return unlinkAsync(chromeSandbox);
+
+  // NOTE: we used to delete `chrome-sandbox` here, which permanently disabled the Chromium
+  // OS-level sandbox for every AppImage user. The launcher script already falls back to
+  // `--no-sandbox` at runtime *only* on systems where unprivileged user namespaces are
+  // disabled, so keeping the helper binary is safe for those systems and gives everyone
+  // else a working sandbox. Never remove it: an unsandboxed renderer turns any JS injection
+  // (or compromised renderer dependency) into full local code execution.
+  void chromeSandbox;
+  void unlinkAsync;
+
+  return undefined;
 };

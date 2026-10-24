@@ -13,9 +13,91 @@ function maybeParseHref(href: string) {
   }
 }
 
+const LOCAL_HOST_SUFFIXES = [
+  '.localhost',
+  '.local',
+  '.localdomain',
+  '.internal',
+  '.intranet',
+  '.lan',
+  '.home',
+  '.home.arpa',
+  '.arpa',
+  '.onion',
+];
+
+/**
+ * Returns true for hostnames/IPs which only make sense locally (loopback, link-local, RFC1918,
+ * CGNAT, multicast, ULA...). Fetching link previews for those lets a remote contact use our
+ * client to probe services running on the machine or on the local network (SSRF / port scan),
+ * and `169.254.169.254` is a well known cloud metadata endpoint.
+ */
+export function isLocalOrPrivateHostname(hostname: string) {
+  const host = (hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host) {
+    return true;
+  }
+
+  if (host === 'localhost' || LOCAL_HOST_SUFFIXES.some(suffix => host.endsWith(suffix))) {
+    return true;
+  }
+
+  // IPv4 (WHATWG URL already normalises odd notations such as 2130706433 or 0x7f.1)
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (ipv4) {
+    const first = Number(ipv4[1]);
+    const second = Number(ipv4[2]);
+    if (first === 0 || first === 10 || first === 127) {
+      return true;
+    }
+    if (first === 169 && second === 254) {
+      return true;
+    }
+    if (first === 172 && second >= 16 && second <= 31) {
+      return true;
+    }
+    if (first === 192 && second === 168) {
+      return true;
+    }
+    if (first === 100 && second >= 64 && second <= 127) {
+      return true;
+    }
+    // multicast / reserved / broadcast
+    return first >= 224;
+  }
+
+  if (host.includes(':')) {
+    // IPv6
+    if (host === '::' || host === '::1') {
+      return true;
+    }
+    // unique local addresses fc00::/7
+    if (/^f[cd][0-9a-f]{2}:/.test(host)) {
+      return true;
+    }
+    // link local fe80::/10
+    if (/^fe[89ab][0-9a-f]:/.test(host)) {
+      return true;
+    }
+    // IPv4 mapped addresses
+    if (host.startsWith('::ffff:')) {
+      return true;
+    }
+    return false;
+  }
+
+  // bare single-label hostnames (resolved through search domains) are not public
+  return !host.includes('.');
+}
+
 function isLinkSafeToPreview(href: string) {
   const url = maybeParseHref(href);
-  return Boolean(url && url.protocol === 'https:' && !isLinkSneaky(href));
+  return Boolean(
+    url &&
+      url.protocol === 'https:' &&
+      !isLinkSneaky(href) &&
+      !isLocalOrPrivateHostname(url.hostname)
+  );
 }
 
 function findLinks(text: string, caretLocation?: number) {

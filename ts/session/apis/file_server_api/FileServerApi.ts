@@ -9,7 +9,7 @@ import {
 } from '../open_group_api/sogsv3/sogsV3BatchPoll';
 import { fromUInt8ArrayToBase64 } from '../../utils/String';
 import { NetworkTime } from '../../../util/NetworkTime';
-import { DURATION } from '../../constants';
+import { DURATION, MAX_ATTACHMENT_FILESIZE_BYTES } from '../../constants';
 import { isReleaseChannel, type ReleaseChannels } from '../../../updater/types';
 import { Storage } from '../../../util/storage';
 import { OnionV4 } from '../../onions/onionv4';
@@ -26,6 +26,11 @@ import { stringify } from '../../../types/sqlSharedTypes';
 const RELEASE_VERSION_ENDPOINT = '/session_version';
 const FILE_ENDPOINT = '/file';
 const ALPHANUMERIC_ID_LEN = 44;
+
+// An attachment can be at most MAX_ATTACHMENT_FILESIZE_BYTES once decrypted. On the wire it is
+// padded and carries the iv (16 bytes) + mac (32 bytes) + secretstream header (24 bytes).
+// Anything above this limit is not a valid attachment and is dropped instead of being buffered.
+const MAX_DOWNLOADED_FILE_BYTES = MAX_ATTACHMENT_FILESIZE_BYTES + 1024 * 1024;
 
 function getShortTTLHeadersIfNeeded(): Record<string, string> {
   if (getFeatureFlag('fsTTL30s')) {
@@ -137,6 +142,16 @@ export const downloadFileFromFileServer = async (
   const { bodyBinary } = result;
   if (!bodyBinary || !bodyBinary.byteLength) {
     window.log.info('download from fileserver failed with status, empty content downloaded ');
+    return null;
+  }
+
+  // Hard cap on what we accept from the network. The declared attachment size is also checked
+  // by the caller, but the download itself must never be unbounded: the file server (or a
+  // malicious URL embedded in a message) is not trusted.
+  if (bodyBinary.byteLength > MAX_DOWNLOADED_FILE_BYTES) {
+    window.log.warn(
+      `download from fileserver: refusing a file of ${bodyBinary.byteLength} bytes (max ${MAX_DOWNLOADED_FILE_BYTES})`
+    );
     return null;
   }
 
