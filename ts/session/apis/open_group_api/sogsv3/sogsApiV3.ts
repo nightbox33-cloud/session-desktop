@@ -153,14 +153,33 @@ async function filterOutMessagesInvalidSignature(
       base64EncodedData: m.data,
     };
   });
-  const signatureValidEncodedData = (await callUtilsWorker(
+  const signatureValidIndexes = (await callUtilsWorker(
     'verifyAllSignatures',
     sentToWorker
-  )) as Array<string>;
+  )) as Array<number>;
+
+  // SECURITY (ZD-4): attribute each validated signature to the exact entry it was
+  // computed over. The worker returns indexes now; matching on `m.data` instead would
+  // let a poll response that repeats the same `data` blob under two different
+  // `session_id`s get a valid signature from one sender attached to another sender's
+  // message (sender impersonation inside a community).
   const signaturesValidMessages = compact(
-    (signatureValidEncodedData || []).map(validData =>
-      messagesFilteredBlindedIds.find(m => m.data === validData)
-    )
+    (signatureValidIndexes || []).map(index => {
+      if (!isNumber(index) || !Number.isInteger(index)) {
+        return undefined;
+      }
+      if (index < 0 || index >= messagesFilteredBlindedIds.length) {
+        return undefined;
+      }
+      const candidate = messagesFilteredBlindedIds[index];
+      // defense in depth: never attribute a validation to a different payload
+      if (!candidate || candidate.data !== sentToWorker[index]?.base64EncodedData) {
+        window?.log?.warn('filterOutMessagesInvalidSignature: signature/payload mismatch');
+        return undefined;
+      }
+
+      return candidate;
+    })
   );
 
   return signaturesValidMessages;

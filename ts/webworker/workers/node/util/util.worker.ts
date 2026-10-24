@@ -2,7 +2,6 @@ import ByteBuffer from 'bytebuffer';
 import { generateKeyPair, sharedKey, verify } from 'curve25519-js';
 // eslint-disable-next-line import/no-named-default
 import { default as sodiumWrappers } from 'libsodium-wrappers-sumo';
-import _ from 'lodash';
 import {
   decryptAttachmentBufferNode as realDecryptAttachmentBufferNode,
   encryptAttachmentBufferNode as realEncryptAttachmentBufferNode,
@@ -97,12 +96,19 @@ async function verifyAllSignatures(
     base64EncodedSignature: string;
     sender: string;
   }>
-) {
-  const checked = [];
+): Promise<Array<number>> {
+  // SECURITY: return the *indexes* of the entries whose own (sender, data, signature)
+  // triple verified. This used to return the `data` strings, so a poll response that
+  // repeats the same `data` blob under two different `session_id`s could bind one
+  // sender's valid signature to another sender's message (ZD-4).
+  const checkedIndexes: Array<number> = [];
   // keep this out of a racing (i.e. no Promise.all) for easier debugging for now
   // eslint-disable-next-line: prefer-for-of
   for (let index = 0; index < uncheckedSignatureMessages.length; index++) {
     const unchecked = uncheckedSignatureMessages[index];
+    if (!unchecked?.base64EncodedData || !unchecked?.base64EncodedSignature || !unchecked?.sender) {
+      continue;
+    }
     try {
       // eslint-disable-next-line no-await-in-loop
       const valid = await verifySignature(
@@ -111,7 +117,7 @@ async function verifyAllSignatures(
         unchecked.base64EncodedSignature
       );
       if (valid) {
-        checked.push(unchecked.base64EncodedData);
+        checkedIndexes.push(index);
         continue;
       }
       // eslint:disable: no-console
@@ -121,7 +127,7 @@ async function verifyAllSignatures(
     }
   }
 
-  return _.compact(checked) || [];
+  return checkedIndexes;
 }
 
 // hexString, base64String, base64String

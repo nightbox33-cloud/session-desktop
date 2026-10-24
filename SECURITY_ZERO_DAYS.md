@@ -1,7 +1,10 @@
 # Zero-days encontrados en Session Desktop 1.18.3 (recepción de mensajes remotos)
 
-**Base:** `dev` @ `b4f92b3` (v1.18.3) · **Método:** análisis estático dirigido al *message pipeline* + PoCs
-ejecutables · **Estado:** los 3 están corregidos en esta rama.
+**Base:** `dev` @ `b4f92b3` (v1.18.3) · **Método:** análisis estático dirigido al *message pipeline* +
+PoCs ejecutables · **Estado:** los 4 están corregidos en esta rama.
+
+> Nota de actualización: ZD-4 se encontró en la tercera pasada (barrido de regex con `recheck` +
+> revisión de la ruta de comunidades SOGS v4).
 
 Todo lo que hay aquí es alcanzable **por un tercero cualquiera de la red Session**, sin interacción del
 usuario y **sin que acepte la solicitud de mensaje**: los mensajes de desconocidos se descifran y se
@@ -196,7 +199,102 @@ stale offer (now - 30d)            | RINGS    | drop
 
 ---
 
+## ZD-4 · Suplantación de remitente en comunidades: la firma Ed25519 se valida por entrada pero se atribuye por `data` (bypass de autenticación)
+
+**Severidad:** Alta (rompe la única garantía criptográfica frente al servidor de comunidad)
+**Componentes:** `ts/session/apis/open_group_api/sogsv3/sogsApiV3.ts:146` (`filterOutMessagesInvalidSignature`),
+`ts/webworker/workers/node/util/util.worker.ts:94` (`verifyAllSignatures`)
+**PoC:** `security-poc/04_sogs_signature_dealias.mjs` (criptografía real, Ed25519, no simulada)
+
+### El fallo
+
+En las comunidades (SOGS v3/v4) el servidor **no es de confianza**: por eso cada mensaje viene con una
+firma Ed25519 sobre el blob `data`, y el cliente comprueba esa firma antes de atribuir el mensaje a
+`session_id`. El problema es **cómo** se empareja la validación con el mensaje:
+
+```ts
+// util.worker.ts — devuelve los PAYLOADS validados, no las entradas
+if (valid) {
+  checked.push(unchecked.base64EncodedData);   // ← solo el string base64
+}
+
+// sogsApiV3.ts — re-asocia por igualdad de string, con .find()
+const signaturesValidMessages = compact(
+  (signatureValidEncodedData || []).map(validData =>
+    messagesFilteredBlindedIds.find(m => m.data === validData)   // ← primera entrada con ese data
+  )
+);
+```
+
+`verifyAllSignatures` valida el par `(session_id, data, signature)` de **cada entrada**, pero devuelve el
+`data`. El llamador busca **la primera** entrada del lote cuyo `data` coincida. Si dos entradas del
+mismo lote comparten `data` (mismo blob, distinto `session_id`), la firma válida del atacante "admite"
+la entrada del otro remitente, cuya firma es inválida y **nunca se vuelve a comprobar**.
+
+El blob `data` en SOGS es cifrado **simétrico** con la clave derivada de la pubkey del servidor: es
+público para todos los miembros y para el servidor. Cualquiera puede copiar el blob exacto.
+
+### PoC
+
+Escenario: respuesta de poll con el mismo `data` dos veces (la primera entrada con `session_id` de la
+víctima y firma basura; la segunda con la firma real del atacante sobre ese mismo blob):
+
+```
+$ node security-poc/04_sogs_signature_dealias.mjs
+--- estado inicial ---
+victim  : 15cb1fd242d7b9…
+attacker: 15e8f003f23f1e…
+data (mismo blob en las 2 entradas): VGhpcyBtZXNzYWdlIGlzIGVu…
+firma de la entrada 1 (atribuida a la víctima) es válida? false
+
+=== CLIENTE SIN PARCHEAR ===
+entradas que pasan el filtro de firma: [ '15cb1fd242d7b9… (seqno 101)' ]
+=> el mensaje se procesa y se guarda como enviado por: LA VÍCTIMA  <-- SUPLANTACIÓN
+   (source/senderIdentity del SogsDecodedEnvelope = 15cb1fd242d7b9…)
+
+=== CLIENTE PARCHEADO ===
+entradas que pasan el filtro de firma: [ '15e8f003f23f1e… (seqno 102)' ]
+=> el mensaje se atribuye a: el atacante (correcto)
+
+--- variante B: dos entradas legítimas, mismo blob ---
+sin parchear, entradas devueltas: [ '15cb1fd242d7b9…', '15cb1fd242d7b9…' ]
+parcheado, entradas devueltas: [ '15cb1fd242d7b9…', '15e8f003f23f1e…' ]
+```
+
+Impacto: el mensaje se procesa con `source`/`senderIdentity` = el remitente elegido por quien controla
+la respuesta, así que aparece en la UI como **escrito por esa persona**, y todas las decisiones
+posteriores (menciones, `isUs`, respuestas, reacciones de esa conversación) usan esa identidad falsa.
+En la variante B el efecto secundario es el inverso: el mensaje legítimo del atacante **desaparece**
+silenciosamente (supresión).
+
+### Precondición, dicha sin adornos
+
+Para controlar `session_id` de una entrada ajena hace falta controlar la respuesta del servidor
+(servidor de comunidad malicioso/comprometido, MITM sobre un servidor que se sirve en claro, o una
+implementación de SOGS que acepte el `public_key` que el cliente envía en el POST — el cliente **sí**
+envía `public_key` en `toJson()`). No es una inyección desde una cuenta normal contra un servidor
+honesto: en ese caso el servidor deriva `session_id` de la clave autenticada. Pero el objetivo exacto
+de esta comprobación de firma es proteger al usuario **de su propio servidor**, y tal como está escrita
+no lo hace: el servidor puede firmar un blob con su propia cuenta y presentarlo como de cualquier
+miembro (administradores incluidos), y el cliente lo acepta.
+
+### Corrección
+
+`verifyAllSignatures` devuelve ahora los **índices** de las entradas validadas (`Array<number>`), y
+`filterOutMessagesInvalidSignature` atribuye **por índice**, con una comprobación extra de que el
+payload que se atribuye es exactamente el que se validó (defensa en profundidad). También se ignoran
+entradas sin `data`/`signature`/`sender` en vez de mandarlas al verificador.
+
+---
+
 ## Qué NO he encontrado (para acotar expectativas)
+
+Barrido automatizado de los 101 literales regex de `ts/**/*.{ts,tsx}` con `recheck@4`: los candidatos
+que marca (p. ej. `MessageBodyHighlight`, ```` ``` ````-fences de `MessageBody.tsx`, el `OUTER_WHITESPACE_REGEX`
+de `ts/session/utils/String.ts`) **no son explotables**: los dos primeros solo se aplican a texto local
+que el usuario escribe en el compositor, y en `String.ts`, `loggerTimed.ts` y `privacy.ts` los prefijos
+son literales de un solo carácter, así que recheck produce un falso positivo (no hay ambigüedad de
+partición). Sin ReDoS remoto.
 
 He revisado los sumideros clásicos y **no** he encontrado un RCE ni un XSS explotable:
 
@@ -227,9 +325,12 @@ ts/models/conversation.ts                   (ZD-1, call sites)
 ts/state/ducks/conversations.ts             (ZD-1)
 ts/receiver/common.ts                       (ZD-2)
 ts/receiver/callMessage.ts                  (ZD-3)
+ts/session/apis/open_group_api/sogsv3/sogsApiV3.ts        (ZD-4)
+ts/webworker/workers/node/util/util.worker.ts             (ZD-4)
 security-poc/01_cross_conversation_reaction_quote.mjs
 security-poc/02_future_timestamp_pin.mjs
 security-poc/03_call_offer_replay.mjs
+security-poc/04_sogs_signature_dealias.mjs
 ```
 
 Verificación recomendada en un build funcional:
