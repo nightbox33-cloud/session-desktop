@@ -884,10 +884,13 @@ export class ConversationModel extends Model<ConversationAttributes> {
 
     // await messageModel.commit();
     if (quote) {
-      await pushQuotedMessageToStoreIfNeeded({
-        author: quote.author,
-        id: quote.timestamp,
-      });
+      await pushQuotedMessageToStoreIfNeeded(
+        {
+          author: quote.author,
+          id: quote.timestamp,
+        },
+        this.id
+      );
     }
 
     this.setLastMessage(messageModel.getNotificationText());
@@ -2351,6 +2354,7 @@ export class ConversationModel extends Model<ConversationAttributes> {
               reaction,
               sender: UserUtils.getOurPubKeyStrFromCache(),
               you: true,
+              conversationId: this.id,
             });
           }
           await MessageQueue.use().sendSyncMessage({
@@ -2371,6 +2375,7 @@ export class ConversationModel extends Model<ConversationAttributes> {
             reaction,
             sender: UserUtils.getOurPubKeyStrFromCache(),
             you: true,
+            conversationId: this.id,
           });
           window.log.debug(`syncing reaction manually for private chat ${ed25519Str(this.id)}`);
           // the reaction logic needs explicit syncing for private chats
@@ -2390,6 +2395,7 @@ export class ConversationModel extends Model<ConversationAttributes> {
             reaction,
             sender: UserUtils.getOurPubKeyStrFromCache(),
             you: true,
+            conversationId: this.id,
           });
         }
         return;

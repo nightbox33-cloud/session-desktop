@@ -37,7 +37,10 @@ export async function handleCallMessage(
   }
 
   if (type === Type.OFFER) {
-    if (Math.max(envelope.sentAtMs - NetworkTime.now()) > TTL_DEFAULT.CALL_MESSAGE) {
+    // `Math.max()` with a single argument is the identity function: it only ever rejected offers
+    // dated in the *future*, never stale ones. A replayed (or withheld and re-injected) OFFER must
+    // be dropped too, so compare the absolute distance to now.
+    if (Math.abs(envelope.sentAtMs - NetworkTime.now()) > TTL_DEFAULT.CALL_MESSAGE) {
       window?.log?.info(
         'Dropping incoming OFFER callMessage sent a while ago: ',
         envelope.sentAtMs

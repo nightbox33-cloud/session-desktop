@@ -303,6 +303,8 @@ async function handleSwarmMessage(
         reaction: rawDataMessage.reaction,
         sender: msgModel.get('source'),
         you: isUsFromCache(msgModel.get('source')),
+        // the reacted message must be resolved inside this conversation only
+        conversationId: convoToAddMessageTo.id,
       });
 
       if (

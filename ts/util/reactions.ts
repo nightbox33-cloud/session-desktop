@@ -1,4 +1,4 @@
-import { isEmpty } from 'lodash';
+import { isEmpty, isFinite } from 'lodash';
 import { Data } from '../data/data';
 import { MessageModel } from '../models/message';
 import { SignalService } from '../protobuf';
@@ -31,30 +31,53 @@ function hitRateLimit(): boolean {
 }
 
 /**
- * Retrieves the original message of a reaction
+ * Retrieves the original message of a reaction.
+ *
+ * SECURITY: `reaction.id` (the message timestamp) and `reaction.author` come straight from a
+ * remote protobuf and are fully attacker controlled, while `reaction` is only authenticated as
+ * being *sent by* the envelope author. The target of the reaction must therefore be resolved
+ * **inside the conversation the reaction was received in**: looking a message up by
+ * `(sent_at, source)` over the whole database lets any Session user react to (and mutate)
+ * messages of conversations they are not part of.
  */
 const getMessageByReaction = async (
   reaction: SignalService.DataMessage.IReaction,
-  openGroupConversationId?: string
+  {
+    conversationId,
+    openGroupConversationId,
+  }: { conversationId?: string; openGroupConversationId?: string }
 ): Promise<MessageModel | null> => {
   let originalMessage = null;
   const originalMessageId = Number(reaction.id);
   const originalMessageAuthor = reaction.author;
 
+  if (!isFinite(originalMessageId) || !originalMessageId) {
+    window?.log?.warn(`Ignore reaction with an invalid message id ${reaction.id}`);
+    return null;
+  }
+
   if (openGroupConversationId && !isEmpty(openGroupConversationId)) {
     originalMessage = await Data.getMessageByServerId(openGroupConversationId, originalMessageId);
-  } else {
+  } else if (conversationId && !isEmpty(conversationId)) {
     const collection = await Data.getMessagesBySentAt(originalMessageId);
     originalMessage = collection.find((item: MessageModel) => {
       const messageTimestamp = item.get('sent_at');
       const author = item.get('source');
+      const messageConversationId = item.get('conversationId');
       return Boolean(
         messageTimestamp &&
           messageTimestamp === originalMessageId &&
           author &&
-          author === originalMessageAuthor
+          author === originalMessageAuthor &&
+          // the reacted message must belong to the conversation the reaction arrived in
+          messageConversationId === conversationId
       );
     });
+  } else {
+    window?.log?.warn(
+      'getMessageByReaction: no conversationId provided. Refusing to resolve a reaction by author/sentAt only.'
+    );
+    return null;
   }
 
   if (!originalMessage) {
@@ -144,11 +167,14 @@ const handleMessageReaction = async ({
   reaction,
   sender,
   you,
+  conversationId,
   openGroupConversationId,
 }: {
   reaction: SignalService.DataMessage.IReaction;
   sender: string;
   you: boolean;
+  /** the conversation this reaction was received in (or is being sent from). Required for 1o1/groupv2 reactions. */
+  conversationId?: string;
   openGroupConversationId?: string;
 }) => {
   if (!reaction.emoji) {
@@ -156,7 +182,10 @@ const handleMessageReaction = async ({
     return undefined;
   }
 
-  const originalMessage = await getMessageByReaction(reaction, openGroupConversationId);
+  const originalMessage = await getMessageByReaction(reaction, {
+    conversationId,
+    openGroupConversationId,
+  });
   if (!originalMessage) {
     return undefined;
   }

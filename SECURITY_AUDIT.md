@@ -54,6 +54,23 @@ nativo fuera de este repositorio).
 
 ---
 
+## 1-bis. Zero-days del pipeline de mensajes remotos (2ª pasada)
+
+En una segunda pasada centrada exclusivamente en la recepción de mensajes remotos se han encontrado
+tres fallos explotables **por cualquier usuario de la red, sin interacción y sin aceptar la solicitud
+de mensaje**. Están documentados con PoC ejecutable en [`SECURITY_ZERO_DAYS.md`](./SECURITY_ZERO_DAYS.md):
+
+| ID | Severidad | Título | Estado |
+|----|-----------|--------|--------|
+| ZD-1 | Media-Alta | Reacciones y citas resuelven el mensaje objetivo por `(sent_at, author)` **en toda la base de datos**, sin acotar a la conversación ⇒ mutación/renderizado de mensajes de conversaciones ajenas | Corregido |
+| ZD-2 | Media-Alta | `sent_at` sin cota superior (+ bypass del chequeo `sigTimestamp` si "legacy") ⇒ *pinning* persistente de una conversación para siempre (DoS silencioso que sobrevive reinicios) | Corregido |
+| ZD-3 | Media | `Math.max()` con un argumento donde se quería `Math.abs()` en `callMessage.ts` ⇒ replay de `OFFER`s de llamada antiguas | Corregido |
+
+PoCs: `security-poc/01_cross_conversation_reaction_quote.mjs`,
+`security-poc/02_future_timestamp_pin.mjs`, `security-poc/03_call_offer_replay.mjs`.
+
+---
+
 ## 2. Hallazgos detallados y correcciones aplicadas
 
 ### SEC‑01 — Renderer sin aislamiento (CRÍTICO, arquitectura) — ABIERTO

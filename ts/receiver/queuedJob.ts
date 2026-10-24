@@ -26,13 +26,36 @@ import type { StateType } from '../state/reducer';
 import { isUsFromCache } from '../session/utils/User';
 import { isUsAnySogsFromCache } from '../session/apis/open_group_api/sogsv3/knownBlindedkeys';
 
-export async function pushQuotedMessageToStoreIfNeeded(quoteDetails: {
-  id: Long | number;
-  author: string;
-}) {
+/**
+ * Resolve the message referenced by an incoming `quote`.
+ *
+ * SECURITY: `quoteDetails.id` (timestamp) and `quoteDetails.author` are attacker controlled and are
+ * only authenticated as coming from the envelope author, not as pointing at a message of *this*
+ * conversation. The quote must therefore only ever be resolved against `conversationId`; otherwise
+ * anybody can make the client render a message of any other conversation of the user inside their
+ * own chat (cross-conversation context injection / spoofing).
+ */
+export async function pushQuotedMessageToStoreIfNeeded(
+  quoteDetails: {
+    id: Long | number;
+    author: string;
+  },
+  conversationId: string
+) {
+  if (!conversationId || isEmpty(conversationId)) {
+    window?.log?.warn('pushQuotedMessageToStoreIfNeeded: no conversationId provided. Refusing.');
+    return undefined;
+  }
+
   const idNumber = longOrNumberToNumber(quoteDetails.id);
+  if (!idNumber) {
+    window?.log?.warn('pushQuotedMessageToStoreIfNeeded: no valid message id in the quote. Refusing.');
+    return undefined;
+  }
+
   const { foundProps } = lookupQuoteInStore({
     timestamp: idNumber,
+    conversationId,
     quotedMessagesInStore:
       (window.inboxStore?.getState() as StateType)?.conversations.quotedMessages || [],
   });
@@ -42,12 +65,14 @@ export async function pushQuotedMessageToStoreIfNeeded(quoteDetails: {
   // If the quote is not found in memory, we try to find it in the DB
   // We always look for the quote by sentAt timestamp, for opengroups, closed groups and session chats
   // this will return an array of sent messages by id that we have locally.
-  const quotedMessagesCollection = await Data.getMessagesBySenderAndSentAt([
-    {
-      timestamp: idNumber,
-      source: quoteDetails.author,
-    },
-  ]);
+  const quotedMessagesCollection = (
+    await Data.getMessagesBySenderAndSentAt([
+      {
+        timestamp: idNumber,
+        source: quoteDetails.author,
+      },
+    ])
+  ).filter(quoted => quoted.get('conversationId') === conversationId);
 
   const first = quotedMessagesCollection?.at(0);
   const foundPropsOrLookedUp = first?.getMessageModelProps();
@@ -68,7 +93,8 @@ export async function pushQuotedMessageToStoreIfNeeded(quoteDetails: {
  */
 async function copyFromQuotedMessage(
   msg: MessageModel,
-  quote?: SignalService.DataMessage.IQuote | null
+  quote: SignalService.DataMessage.IQuote | null | undefined,
+  conversationId: string
 ): Promise<void> {
   if (!quote) {
     return;
@@ -82,7 +108,7 @@ async function copyFromQuotedMessage(
         ? UserUtils.getOurPubKeyStrFromCache()
         : author,
   };
-  const foundPropsOrLookedUp = await pushQuotedMessageToStoreIfNeeded(quote);
+  const foundPropsOrLookedUp = await pushQuotedMessageToStoreIfNeeded(quote, conversationId);
 
   if (!foundPropsOrLookedUp) {
     msg.setQuote(quoteLocal);
@@ -219,7 +245,7 @@ async function handleRegularMessage(
   decodedEnvelope: BaseDecodedEnvelope
 ): Promise<void> {
   // this does not trigger a UI update nor write to the db
-  await copyFromQuotedMessage(message, rawDataMessage.quote);
+  await copyFromQuotedMessage(message, rawDataMessage.quote, conversation.id);
 
   if (
     rawDataMessage.communityInvitation &&

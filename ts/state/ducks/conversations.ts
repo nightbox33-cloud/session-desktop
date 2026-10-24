@@ -376,12 +376,19 @@ export type ConversationsStateType = {
 
 export function lookupQuoteInStore({
   timestamp,
+  conversationId,
   quotedMessagesInStore,
 }: {
   timestamp: number;
+  /** when provided, only a quoted message of that conversation can match */
+  conversationId?: string;
   quotedMessagesInStore: Array<MessageModelPropsWithoutConvoProps>;
 }) {
-  const foundAt = quotedMessagesInStore.findIndex(m => m.propsForMessage.timestamp === timestamp);
+  const foundAt = quotedMessagesInStore.findIndex(
+    m =>
+      m.propsForMessage.timestamp === timestamp &&
+      (!conversationId || m.propsForMessage.convoId === conversationId)
+  );
 
   return {
     foundAt,
@@ -636,10 +643,11 @@ function removeQuotedMessageProps(
   msgChangedProps: MessageModelPropsWithoutConvoProps
 ) {
   // Check if the message is quoted somewhere, and if so, remove it from the quotes
-  const { timestamp, sender } = msgChangedProps.propsForMessage;
+  const { timestamp, sender, convoId } = msgChangedProps.propsForMessage;
   if (timestamp && sender) {
     const { foundAt, foundProps } = lookupQuoteInStore({
       timestamp,
+      conversationId: convoId,
       quotedMessagesInStore: quotedMessageProps,
     });
     if (foundAt >= 0) {
